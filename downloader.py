@@ -151,8 +151,8 @@ class Downloader:
 		self._set_next_throttling_period()
 
 		headers = {
-			'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:32.0) '
-						  'Gecko/20100101 Firefox/32.0'
+			'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) '
+						  'Gecko/20100101 Firefox/40.1'
 		}
 		headers.update(self.headers or { })
 
@@ -209,13 +209,13 @@ class Downloader:
 		retry_run = kwargs.get('retry_run', False)
 		assert (not retry_run) or (retry_run and row is None)
 		if row is None:
-			result = self._download(url).get_file_obj()
+			file_obj = self._download(url).get_file_obj()
 			downloaded = True
 		else:
-			result = cStringIO.StringIO(zlib.decompress(row[0]))
+			file_obj = cStringIO.StringIO(zlib.decompress(row[0]))
 
 		if parse_as_html:
-			tree = lxml.html.parse(result)
+			tree = lxml.html.parse(file_obj)
 			tree.getroot().url = url
 			appears_to_be_banned = False
 			if self.does_show_ban(tree.getroot()):
@@ -236,7 +236,7 @@ class Downloader:
 				else:
 					return self.open_url(url, stale_after, retry_run = True)
 		else:
-			tree = result.read()
+			tree = file_obj.read()
 
 		if downloaded:
 # make_links_absolute should only be called when the document has a base_url
