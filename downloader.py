@@ -23,10 +23,36 @@ Downloader's features make it ideal for writing scrapers, as it can keep its
 network footprint small (due to the cache) and irregular (due to the random
 throttling interval).
 """
-import urllib2, sqlite3, zlib, cStringIO, logging, datetime, random, time
+import urllib2, sqlite3, zlib, random, time
+import itertools, cStringIO, logging, datetime
 import lxml.html
+import memoize
 
 _LOGGER = logging.getLogger(__name__)
+
+### Example usage for Crawler:
+# import collections
+# 
+# def handler(crawl_element):
+# 	print crawl_element
+# 	result = collections.defaultdict(list)
+# 	a_elems = crawl_element.xpath(
+# 			r'//a',
+# 			[0, None]
+# 	)
+# 	for a_elem in a_elems:
+# 		href = a_elem.crawl_element.get('href')
+# 		result[handler].append(URL(href, 2))
+# 	return result
+# 
+# crawler = Crawler(
+# 		handler,
+# 		CrawlURL('http://www.bgtrain.com/', 0),
+# 		os.path.join(ROOT_DIR, 'delme.db'),
+# 		[1, 10],
+# )
+# 
+# crawler.crawl()
 
 class URLOpenResult:
 
@@ -270,5 +296,145 @@ class Downloader:
 
 				)
 		return tree
+
+class UnexpectedContentException(Exception):
+	def __init__(self, url, selector, bounds, results):
+		self.url = url
+		self.selector = selector
+		self.bounds = bounds
+		self.results = results
+		Exception.__init__(self, str(self))
+
+	def __str__(self):
+		return ('Bounds: %s, '
+				'len of results: %s, '
+				'for selector: "%s" in url: %s' 
+				% (self.bounds, len(self.results), self.selector, self.url)
+		)
+
+class CrawlElement(object):
+	def __init__(self, in_, url):
+		if hasattr(in_, 'getroot'):
+			self.element = in_.getroot()
+		else:
+			self.element = in_
+		self.url = url
+
+	def xpath(self, xpath, bounds = [None, None]):
+		results = [CrawlElement(_, self.url) 
+				   if hasattr(_, 'xpath') 
+				   else _ for _ in self.element.xpath(xpath)]
+		should_raise = False
+		if bounds[0] is not None and bounds[0] > len(results):
+			should_raise = True
+		if bounds[1] is not None and bounds[1] < len(results):
+			should_raise = True
+		if should_raise:
+			raise UnexpectedContentException(
+							self.element.base_url, xpath, bounds, results)
+		return results
+
+	def xpath_one(self, xpath):
+		return self.xpath(xpath, [1, 1])[0]
+
+	def text_content(self):
+		return self.element.text_content()
+
+	def tostring(self, pretty_print = True):
+		return lxml.html.tostring(self.element, pretty_print)
+
+class CrawlURL:
+	def __init__(self, url, staleness, parse_as_html = True):
+		self.url = url
+		self.staleness = staleness
+		self.parse_as_html = parse_as_html
+	def __hash__(self):
+		return hash((self.url, self.staleness))
+	def __str__(self):
+		return "<URL: %s Staleness: %s>" % (self.url, self.staleness)
+	def __repr__(self):
+		return str(self)
+	def __eq__(self, other):
+		return self.url == other.url and self.staleness == other.staleness
+
+class Crawler:
+
+	def __init__(self, top_function, top_url, 
+				 cache_path, throttle_bounds, headers = {}):
+		"""
+		top_function is a function that receives a CrawlElement instance and
+		returns a dict mapping (function of an identical signature and return
+		type) to (list of URL instances).  
+		top_url is a URL instance
+		"""
+		self.top_function = top_function
+		self.top_url = top_url
+		self.headers = headers
+		class DownloaderWithBanProtection(Downloader):
+			def does_show_ban(self_downloader, crawl_element):
+				return self.does_show_ban(crawl_element)
+		self.downloader = DownloaderWithBanProtection(
+								cache_path, throttle_bounds, headers)
+		self.visited = set()
+		self.not_allowed_hrefs = set()
+		self.download_and_parse = memoize.MemoizedFunction(
+							self.download_and_parse, 100, record_stats = True)
+
+	def download_and_parse(self, url):
+		if url.parse_as_html:
+			result = CrawlElement(self.downloader.open_url(
+								url.url, url.staleness), url)
+		else:
+			result = self.downloader.open_url(
+								url.url, url.staleness, parse_as_html = False)
+		return result
+
+	def does_show_ban(self, crawl_element):
+		""" This is intended to be overidden by subclasses. """
+		return False
+
+	def crawl(self, max_reps = None):
+		pair_lists = [[(self.top_function, self.top_url)]]
+		repi = 0
+		while (
+			sum(len(pair_list) for pair_list in pair_lists) > 0 
+			and (max_reps is None or repi <= max_reps)
+		):
+			repi += 1
+			new_pair_lists = [ ]
+			for pair in (
+				pair for pair in itertools.chain(*pair_lists) 
+				if pair not in self.visited
+			):
+				func, url_obj = pair
+
+# Since functions are supposed to be deterrministic, it doesn't make sense to
+# have cycles. They quickly lead to infinite loops.
+
+# Note that this mechanism is not perfect; network errors can mean that the
+# output of a pair was not processed fully, and so a cycle could be
+# advantageous. I should implement periodic purge of the cycle guard (the
+# "visited" variable) and also of the "not_allowed_hrefs" variable.
+
+				try:
+					crawl_element = self.download_and_parse(url_obj)
+				except HTTPCodeNotOKError as e:
+					_LOGGER.error(e)
+					self.not_allowed_hrefs.add(e.url)
+					continue
+				except IOError as ioe:
+					_LOGGER.error(ioe)
+					continue
+				_LOGGER.info('Calling page handler function: %s with '
+								'argument: %s', func, crawl_element)
+				mapping = func(crawl_element)
+				for new_func, url_list in mapping.iteritems():
+					new_pair_lists.append([ ])
+					for url_obj in url_list:
+						if url_obj.url not in self.not_allowed_hrefs:
+							new_pair_lists[-1].append((new_func, url_obj))
+				self.visited.add(pair)
+
+			pair_lists = new_pair_lists
 
 
