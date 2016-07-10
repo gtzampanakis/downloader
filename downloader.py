@@ -24,15 +24,32 @@ network footprint small (due to the cache) and irregular (due to the random
 throttling interval).
 """
 import urllib2, sqlite3, zlib, cStringIO, logging, datetime, random, time
+import lxml.html
 
+_LOGGER = logging.getLogger(__name__)
 
-LOGGER = logging.getLogger(__name__)
+class URLOpenResult:
 
-def date_to_sqlite_str(d):
+	def __init__(self, urlopen_result):
+		self.inner = urlopen_result
+
+	def get_code(self):
+		return self.inner.getcode()
+
+	def get_file_obj(self):
+		return self.inner
+
+def _urlopen(url, headers):
+	request = urllib2.Request(url, headers = headers)
+	result = urllib2.urlopen(request)
+	return URLOpenResult(result)
+
+def _date_to_sqlite_str(d):
 	if d is None:
 		return None
 	return '-'.join(
-			('0' if len(str(f)) == 1 else '') + str(f) for f in [d.year, d.month, d.day]
+			('0' if len(str(f)) == 1 else '') 
+					+ str(f) for f in [d.year, d.month, d.day]
 	)
 
 
@@ -58,8 +75,8 @@ class Downloader:
 		request.
 
 		headers -- A dictionary of headers to be used for network HTTP
-		requests. If no User-Agent header is passed via this argument then network request
-		will send a Firefox 32.0 User-Agent.
+		requests. If no User-Agent header is passed via this argument then
+		network request will send a Firefox 32.0 User-Agent.
 		"""
 		self.path = path
 		self.throttle_bounds = throttle_bounds
@@ -116,14 +133,16 @@ class Downloader:
 
 	def _download(self, url):
 		if self.last_download is not None:
-			LOGGER.info('Waiting until throttling period (%.3f seconds) has passed for next download...', self.next_throttling_period)
+			_LOGGER.info(
+				'Waiting until throttling period (%.3f seconds) '
+				'has passed for next download...', self.next_throttling_period)
 			while True:
 				since_last_download = (time.time() - self.last_download)
 				if self.next_throttling_period < since_last_download:
 					break
 				else:
 					time.sleep(.1)
-		LOGGER.info('Downloading url %s', url)
+		_LOGGER.info('Downloading url %s', url)
 # It's important to set the last_download before actually starting the
 # download, otherwise if an exception is thrown while downloading the next call
 # will proceed to download right away, without respecting the throttling
@@ -132,20 +151,16 @@ class Downloader:
 		self._set_next_throttling_period()
 
 		headers = {
-			'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:32.0) Gecko/20100101 Firefox/32.0'
+			'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:32.0) '
+						  'Gecko/20100101 Firefox/32.0'
 		}
 		headers.update(self.headers or { })
-		request = urllib2.Request(
-				url,
-				headers = headers,
-		)
 
-		result = urllib2.urlopen(request)
+		result = _urlopen(url, headers)
 
-		if result.getcode() != 200:
-			raise HTTPCodeNotOKError(url, result.code)
+		if result.get_code() != 200:
+			raise HTTPCodeNotOKError(url, result.get_code())
 		return result
-
 
 
 	def open_url(self, url, stale_after, parse_as_html = True, **kwargs):
@@ -170,10 +185,11 @@ class Downloader:
 
 		BannedException -- If does_show_ban returns True.
 
-		HTTPCodeNotOKError -- If the returned HTTP status code is not equal to 200.
+		HTTPCodeNotOKError -- If the returned HTTP status code 
+							  is not equal to 200.
 
 		"""
-		LOGGER.debug('open_url() received url: %s', url)
+		_LOGGER.debug('open_url() received url: %s', url)
 		today = datetime.date.today()
 		threshold_date = today - datetime.timedelta(stale_after)
 		downloaded = False
@@ -185,7 +201,7 @@ class Downloader:
 				where url = ?
 				and date > ?
 				''',
-				(url, date_to_sqlite_str(threshold_date))
+				(url, _date_to_sqlite_str(threshold_date))
 			)
 
 		row = rs.fetchone()
@@ -193,26 +209,26 @@ class Downloader:
 		retry_run = kwargs.get('retry_run', False)
 		assert (not retry_run) or (retry_run and row is None)
 		if row is None:
-			result = self._download(url)
+			result = self._download(url).get_file_obj()
 			downloaded = True
 		else:
 			result = cStringIO.StringIO(zlib.decompress(row[0]))
 
 		if parse_as_html:
-			import lxml.html
 			tree = lxml.html.parse(result)
 			tree.getroot().url = url
 			appears_to_be_banned = False
 			if self.does_show_ban(tree.getroot()):
 				appears_to_be_banned = True
 				if downloaded:
-					message = ("Function {f} claims we have been banned, "
-								"it was called with an element parsed from url "
-								"(downloaded, not from cache): {u}"
-								.format(f = self.does_show_ban, u = url))
-					LOGGER.error(message)
-				LOGGER.info('Deleting url %s from the cache (if it exists) '
-							'because it triggered ban page cache poisoning exception', url)
+					message = ('Function {f} claims we have been banned, '
+							   'it was called with an element parsed from url '
+							   '(downloaded, not from cache): {u}'
+							   .format(f = self.does_show_ban, u = url))
+					_LOGGER.error(message)
+				_LOGGER.info('Deleting url %s from the cache (if it exists) '
+							'because it triggered ban page cache poisoning '
+							'exception', url)
 				with self._get_conn() as conn:
 					conn.execute('delete from cache where url = ?', [str(url)])
 				if downloaded:
@@ -248,7 +264,7 @@ class Downloader:
 					''',
 					(
 						str(url),
-						date_to_sqlite_str(today),
+						_date_to_sqlite_str(today),
 						to_store
 					)
 
@@ -256,6 +272,3 @@ class Downloader:
 		return tree
 
 
-
-if __name__ == '__main__':
-	pass
