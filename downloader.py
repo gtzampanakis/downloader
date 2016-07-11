@@ -279,7 +279,7 @@ class Downloader:
 				to_store = tree
 			to_store = zlib.compress(to_store, 8)
 
-			logging.debug('Storing url %s to cache', url)
+			_LOGGER.debug('Storing url %s to cache', url)
 			with self._get_conn() as conn:
 				conn.execute('''
 					insert or replace 
@@ -291,7 +291,7 @@ class Downloader:
 					(
 						str(url),
 						_date_to_sqlite_str(today),
-						to_store
+						sqlite3.Binary(to_store)
 					)
 
 				)
