@@ -215,7 +215,7 @@ class Downloader:
 							  is not equal to 200.
 
 		"""
-		_LOGGER.debug('open_url() received url: %s', url)
+		_LOGGER.info('open_url() received url: %s', url)
 		today = datetime.date.today()
 		threshold_date = today - datetime.timedelta(stale_after)
 		downloaded = False
@@ -279,7 +279,6 @@ class Downloader:
 				to_store = tree
 			to_store = zlib.compress(to_store, 8)
 
-			_LOGGER.debug('Storing url %s to cache', url)
 			with self._get_conn() as conn:
 				conn.execute('''
 					insert or replace 
@@ -336,6 +335,19 @@ class CrawlElement(object):
 
 	def xpath_one(self, xpath):
 		return self.xpath(xpath, [1, 1])[0]
+
+	def xpath_pick_one(self, xpaths):
+		"""
+		Try each of the xpaths successively until
+		a single element is found. If no xpath succeeds
+		then raise the last UnexpectedContentException caught.
+		"""
+		for xpathi, xpath in enumerate(xpaths):
+			try:
+				return self.xpath(xpath, [1, 1])[0]
+			except UnexpectedContentException as e:
+				if xpathi == len(xpaths) - 1:
+					raise
 
 	def text_content(self):
 		return self.element.text_content()
@@ -423,16 +435,15 @@ class Crawler:
 					self.not_allowed_hrefs.add(e.url)
 					continue
 				except IOError as ioe:
-					_LOGGER.error(ioe)
+					_LOGGER.exception(ioe)
 					continue
-				_LOGGER.info('Calling page handler function: %s with '
-								'argument: %s', func, crawl_element)
 				mapping = func(crawl_element)
-				for new_func, url_list in mapping.iteritems():
-					new_pair_lists.append([ ])
-					for url_obj in url_list:
-						if url_obj.url not in self.not_allowed_hrefs:
-							new_pair_lists[-1].append((new_func, url_obj))
+				if mapping:
+					for new_func, url_list in mapping.iteritems():
+						new_pair_lists.append([ ])
+						for url_obj in url_list:
+							if url_obj.url not in self.not_allowed_hrefs:
+								new_pair_lists[-1].append((new_func, url_obj))
 				self.visited.add(pair)
 
 			pair_lists = new_pair_lists
