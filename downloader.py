@@ -47,8 +47,8 @@ _LOGGER = logging.getLogger(__name__)
 # 
 # crawler = Crawler(
 # 		handler,
-# 		CrawlURL('http://www.bgtrain.com/', 0),
-# 		os.path.join(ROOT_DIR, 'delme.db'),
+# 		CrawlURL('http://www.example.com/', 0),
+# 		os.path.join(ROOT_DIR, 'pages.db'),
 # 		[1, 10],
 # )
 # 

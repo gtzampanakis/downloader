@@ -2,10 +2,11 @@ from distutils.core import setup
 
 setup(
 	name = 'downloader',
-	version = '0.96',
+	version = '0.98',
 	author = 'Giorgos Tzampanakis',
 	author_email = 'giorgos.tzampanakis@gmail.com',
-	py_modules = ['downloader'],
+	url = 'https://github.com/gtzampanakis/downloader',
+	py_modules = ['downloader' , 'memoize'],
 	license = 'MIT',
 	platforms = 'Any',
 	requires = [ 
